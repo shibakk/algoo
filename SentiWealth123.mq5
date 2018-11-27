@@ -11,40 +11,14 @@
 
 #include <Trade\Trade.mqh>
 
-//--- indicator buffers
+//--- indicator buffers 
+double                   GSBuffer[]; 
 int                      gs_handle; 
 
 input double MaximumRisk = 0.02; // Max risk in %
 input double DecreaseFactor = 3; // Decrease factor
 
-//+------------------------------------------------------------------+ 
-//| Enumeration of the methods of handle creation                    | 
-//+------------------------------------------------------------------+ 
-enum Creation 
-  { 
-   Call_GS,                   // use GS 
-   Call_IndicatorCreate       // use IndicatorCreate 
-  }; 
-//--- input parameters 
-input Creation                      type=Call_GS;                // type of the function  
-input int                           ma_period=7;                 // period of ma 
-input int                           ma_shift=1;                   // shift
-input ENUM_MA_METHOD                ma_method=MODE_SMA;     // type of price 
-input string                        symbol=" ";                   // symbol  
-input ENUM_TIMEFRAMES               period=PERIOD_CURRENT;        // timeframe
-input ENUM_CHART_PROPERTY_DOUBLE    double_values;
-input string               keyword="debt";
 
-//--- variable for storing the handle of the iMA indicator 
-int    handle; 
-//--- variable for storing 
-string name=symbol; 
-//--- name of the indicator on a chart 
-string short_name; 
-//--- we will keep the number of values in the GS Average indicator 
-int    bars_calculated=0; 
-//--- indicator buffers
-double         GSBuffer[];
 //+------------------------------------------------------------------+
 //| Global Var                    |
 //+------------------------------------------------------------------+
@@ -75,40 +49,10 @@ double         NumerationBuffer[];
 int GS_handle;
 int OnInit()
   {
-//--- indicator buffers mapping
-   SetIndexBuffer(0,GSBuffer,INDICATOR_DATA);
-//--- set shift 
-   PlotIndexSetInteger(0,PLOT_SHIFT,ma_shift);    
-//--- determine the symbol the indicator is drawn for   
-   name=symbol; 
-//--- delete spaces to the right and to the left 
-   StringTrimRight(name); 
-   StringTrimLeft(name); 
-//--- if it results in zero length of the 'name' string 
-   if(StringLen(name)==0) 
-     { 
-      //--- take the symbol of the chart the indicator is attached to 
-      name=_Symbol; 
-     } 
-//--- create handle of the indicator 
-   if(type==Call_GS) 
-     { 
-      //--- fill the structure with parameters of the indicator 
-      MqlParam pars[4]; 
-      //--- period 
-      pars[0].type=TYPE_INT; 
-      pars[0].integer_value=ma_period; 
-      //--- shift 
-      pars[1].type=TYPE_INT; 
-      pars[1].integer_value=ma_shift; 
-      //--- type of smoothing 
-      pars[2].type=TYPE_INT; 
-      pars[2].integer_value=ma_method; 
-      //--- type of price 
-      pars[3].type=TYPE_DOUBLE; 
-      pars[3].double_value=last; 
-      handle=IndicatorCreate(name,period,IND_MA,4,pars);
-     }
+     SetIndexBuffer(0,NumberationBuffer,INDICATOR_DATA)
+     GS_handle=iCustom(_Symbol,_Period,
+     ArraySetAsSeries(NumerationBuffer,true);
+     GS
    //---
      ResetLastError();
      int file_handle=FileOpen(file_name,open_flags,delimiter);
@@ -145,20 +89,10 @@ int OnInit()
        {
         PrintFormat("FAILED TO OPEN %s FILE, Error code = %d",file_name,GetLastError());
         PrintFormat("Please contact customer support at www.trader-help.com");
-        //--- tell about the failure and output the error code 
-        PrintFormat("Failed to create handle of the iMA indicator for the symbol %s/%s, error code %d", 
-                    name, 
-                    EnumToString(period), 
-                    GetLastError()); 
-      //--- the indicator is stopped early 
         return(INIT_FAILED);
        }
 
-     //--- show the symbol/timeframe the Moving Average indicator is calculated for 
-   short_name=StringFormat("GS(%s/%s, %d, %d, %s, %s)",name,EnumToString(period), 
-                           ma_period, ma_shift,EnumToString(ma_method),EnumToString(double_values)); 
-   IndicatorSetString(INDICATOR_SHORTNAME,short_name); 
-//--- normal initialization of the indicator 
+     ArraySetAsSeries(gs_buff,true);
      return(INIT_SUCCEEDED);
    }
 
@@ -167,12 +101,28 @@ int OnInit()
 //+------------------------------------------------------------------+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
-                const int begin,
-                const double &price[])
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
   {
-//---
-   //--- number of values copied from the iMA indicator 
+//---  we'll store the time of the current zero bar opening
+   static datetime currentBarTimeOpen=0;
+    //--- number of values copied from the iMA indicator 
    int values_to_copy; 
+//--- revert access to array time[] - do it like in timeseries
+   ArraySetAsSeries(time,true);
+//--- If time of zero bar differs from the stored one
+   if(currentBarTimeOpen!=time[0])
+     {
+     //--- enumerate all bars from the current to the chart depth
+      for(int i=rates_total-1;i>=0;i--) NumerationBuffer[i]=i;
+      currentBarTimeOpen=time[0];
+     }
 //--- determine the number of values calculated in the indicator 
    int calculated=BarsCalculated(handle); 
    if(calculated<=0) 
@@ -195,18 +145,6 @@ int OnCalculate(const int rates_total,
       //--- for calculation not more than one bar is added 
       values_to_copy=(rates_total-prev_calculated)+1; 
      } 
-//--- fill the iMABuffer array with values of the Moving Average indicator 
-//--- if FillArrayFromBuffer returns false, it means the information is nor ready yet, quit operation 
-   if(!FillArrayFromBuffer(GSBuffer,ma_shift,handle,values_to_copy)) return(0); 
-//--- form the message 
-   string comm=StringFormat("%s ==>  Updated value in the indicator %s: %d", 
-                            TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS), 
-                            short_name, 
-                            values_to_copy); 
-//--- display the service message on the chart 
-   Comment(comm); 
-//--- memorize the number of values in the Moving Average indicator 
-   bars_calculated=calculated;  
 //--- return value of prev_calculated for next call
    return(rates_total);
   }
@@ -279,35 +217,6 @@ double TradeSizeOptimized(void)
    }
    
 
-//+------------------------------------------------------------------+ 
-//| Filling indicator buffers from the MA indicator                  | 
-//+------------------------------------------------------------------+ 
-bool FillArrayFromBuffer(double &values[],   // indicator buffer of Moving Average values 
-                         int shift,          // shift 
-                         int ind_handle,     // handle of the iMA indicator 
-                         int amount          // number of copied values 
-                         ) 
-  { 
-//--- reset error code 
-   ResetLastError(); 
-//--- fill a part of the iMABuffer array with values from the indicator buffer that has 0 index 
-   if(CopyBuffer(ind_handle,0,-shift,amount,values)<0) 
-     { 
-      //--- if the copying fails, tell the error code 
-      PrintFormat("Failed to copy data from the iMA indicator, error code %d",GetLastError()); 
-      //--- quit with zero result - it means that the indicator is considered as not calculated 
-      return(false); 
-     } 
-//--- everything is fine 
-   return(true); 
-  }
-  
-void OnDeinit(const int reason) 
-  { 
-//--- clear the chart after deleting the indicator 
-   Comment(""); 
-  }     
-
 void BuyOrSell(void)
   {
    MqlRates rt[3];
@@ -320,9 +229,9 @@ void BuyOrSell(void)
 //--- Trade only on the first tick of the new bar
    if(rt[1].tick_volume>1)
       return;
+/
 //--- get the current value of the Moving Average indicator
-   double lv;
-   if(CopyBuffer(lv,0,0,1,current_number)!=1)
+   if(CopyBuffer(last,1,0,1,gs_buff)!=1)
      {
       Print("CopyBuffer from iMA failed, no data");
       return;
